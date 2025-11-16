@@ -1,8 +1,9 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 
-app = FastAPI()
+app = FastAPI(title="DeepParse API", description="APIs for document extraction")
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,6 +64,59 @@ def test_database():
     response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
     
     return response
+
+
+@app.post("/api/extract")
+async def extract_document(file: UploadFile = File(...)):
+    """Extract text content from uploaded documents.
+    Supports: PDF (application/pdf) and plain text (text/plain).
+    """
+    try:
+        content_type = file.content_type or ""
+        filename = file.filename or "uploaded"
+        raw = await file.read()
+
+        if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
+            try:
+                from pypdf import PdfReader
+            except Exception:
+                raise HTTPException(status_code=500, detail="PDF support not available on server")
+
+            import io
+            reader = PdfReader(io.BytesIO(raw))
+            pages = []
+            for p in reader.pages:
+                try:
+                    pages.append(p.extract_text() or "")
+                except Exception:
+                    pages.append("")
+            text = "\n\n".join(pages).strip()
+            if not text:
+                text = "No extractable text found in PDF (it may be scanned)."
+            return {
+                "filename": filename,
+                "content_type": "application/pdf",
+                "characters": len(text),
+                "preview": text[:2000]
+            }
+
+        elif content_type.startswith("text/") or filename.lower().endswith(('.txt', '.csv', '.md', '.log')):
+            try:
+                text = raw.decode("utf-8", errors="replace")
+            except Exception:
+                text = raw.decode(errors="replace")
+            return {
+                "filename": filename,
+                "content_type": content_type or "text/plain",
+                "characters": len(text),
+                "preview": text[:2000]
+            }
+        else:
+            raise HTTPException(status_code=415, detail="Unsupported file type. Please upload PDF or plain text.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)[:200]}")
 
 
 if __name__ == "__main__":
